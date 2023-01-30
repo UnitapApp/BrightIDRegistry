@@ -1,44 +1,137 @@
 // SPDX-License-Identifier: MIT
 pragma solidity ^0.8.7;
 
-contract VerifySignature {
+import "@openzeppelin/contracts/access/AccessControl.sol";
+
+contract UserRegistry is AccessControl {
     struct UserInfo {
-        address User;
+        address user;
         uint256 verificationEpoch;
     }
+
+    bytes32 public constant SETTER_ROLE = keccak256("SETTER_ROLE");
 
     bytes32 public app; // application name
     bytes32 public verificationHash; // node verification hash
     address public nodeAddress; // signatures from this node are valid
+    uint256 public immutable verificationPeriod; // the period by which all verifications are invalidated
 
-    uint256 public verificationPeriod; // the period by which all verifications are invalidated
     mapping(address => UserInfo) public userInfo;
 
-    constructor(
-        bytes32 app_,
-        bytes32 verificationHash_,
-        address nodeAddress_
-    ) {}
+    // ============ Events ============
 
-    function getActiveEpoch() public view returns (uint256) {
-        return block.timestamp / verificationPeriod;
+    event Verified(address user, uint256 epoch);
+    event NodeAddressChanged(address nodeAddressOld, address nodeAddressNew);
+    event VerificationHashChanged(
+        bytes32 verificationHashOld,
+        bytes32 verificationHashNew
+    );
+    event AppChanged(bytes32 appOld, bytes32 appNew);
+
+    // ============ Errors ============
+
+    error InvalidSignature();
+    error SignatureExpired();
+
+    constructor(
+        string memory app_,
+        bytes32 verificationHash_,
+        address nodeAddress_,
+        uint256 verificationPeriod_,
+        address admin_,
+        address setter_
+    ) {
+        setApp(app_);
+        setVerificationHash(verificationHash_);
+        setNodeAddress(nodeAddress_);
+
+        _setupRole(DEFAULT_ADMIN_ROLE, admin_);
+        _setupRole(SETTER_ROLE, setter_);
+
+        verificationPeriod = verificationPeriod_;
     }
 
-    function verify(address user) public pure returns (address) {
-        bytes32 app = bytes32(abi.encodePacked("unitapTest"));
-        bytes32 verificationHash = 0x501d93d62115b06f5ceb1dd25f831dc7bbf0478ce81303c1b3a2172cdff6e465;
-        address addr = 0xB10f8E218A9cD738b0F1E2f7169Aa3c0897F2d83;
-        uint256 timestamp = 1672834200;
+    // ============ Public Functions ============
 
-        bytes32 r = 0xca5bf2a09abff8a3b154645e40b54a4b0c443c4ddef3a4a9967af1e94ddef422;
-        bytes32 s = 0x01dd9f94456a248183699798a0f9a175277f0154574c6cb64ee638226abc0d66;
-        uint8 v = 28;
+    /// @notice verification status of a user
+    /// @param user The user to check
+    function isVerified(address user) public view returns (bool) {
+        UserInfo memory _userInfo = userInfo[user];
+        if (_userInfo.user == address(0)) {
+            return false;
+        }
+        return _userInfo.verificationEpoch == getActiveEpoch();
+    }
+
+    /// @notice Get the current epoch
+    function getActiveEpoch() public view returns (uint256) {
+        return getEpoch(block.timestamp);
+    }
+
+    /// @notice Verify a user using a signature obtained from a trusted node
+    /// @param user The user to verify
+    /// @param verificationTimestamp The timestamp of the verification
+    /// @param r The r component of the signature
+    /// @param s The s component of the signature
+    /// @param v The v component of the signature
+    function verify(
+        address user,
+        uint256 verificationTimestamp,
+        bytes32 r,
+        bytes32 s,
+        uint8 v
+    ) public {
+        uint256 activeEpoch = getActiveEpoch();
+
+        if (activeEpoch > getEpoch(verificationTimestamp)) {
+            revert SignatureExpired();
+        }
 
         bytes32 message = keccak256(
-            abi.encodePacked(app, addr, verificationHash, timestamp)
+            abi.encodePacked(app, user, verificationHash, verificationTimestamp)
         );
-        address signer = ecrecover(message, v, r, s);
 
-        return signer;
+        if (nodeAddress != ecrecover(message, v, r, s)) {
+            revert InvalidSignature();
+        }
+
+        userInfo[user] = UserInfo(user, activeEpoch);
+
+        emit Verified(user, activeEpoch);
+    }
+
+    // ============ Setter Functions ============
+
+    /// @notice Set the node address
+    /// @param nodeAddress_ The new node address
+    function setNodeAddress(address nodeAddress_) public onlyRole(SETTER_ROLE) {
+        emit NodeAddressChanged(nodeAddress, nodeAddress_);
+        nodeAddress = nodeAddress_;
+    }
+
+    /// @notice Set the verification hash
+    /// @param verificationHash_ The new verification hash
+    function setVerificationHash(bytes32 verificationHash_)
+        public
+        onlyRole(SETTER_ROLE)
+    {
+        emit VerificationHashChanged(verificationHash, verificationHash_);
+        verificationHash = verificationHash_;
+    }
+
+    /// @notice Set the app
+    /// @param app_ The new app
+    function setApp(string memory app_) public onlyRole(SETTER_ROLE) {
+        bytes32 newApp = bytes32(abi.encodePacked(app_));
+        emit AppChanged(app, newApp);
+        app = newApp;
+    }
+
+    // ============ Internal Functions ============
+
+    /// @notice Get the epoch of a timestamp
+    /// @param timestamp The timestamp to get the epoch of
+    function getEpoch(uint256 timestamp) internal view returns (uint256) {
+        return timestamp / verificationPeriod;
     }
 }
