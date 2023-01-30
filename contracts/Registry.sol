@@ -41,14 +41,13 @@ contract UserRegistry is AccessControl {
         address admin_,
         address setter_
     ) {
-        setApp(app_);
-        setVerificationHash(verificationHash_);
-        setNodeAddress(nodeAddress_);
+        app = bytes32(abi.encodePacked(app_));
+        verificationHash = verificationHash_;
+        nodeAddress = nodeAddress_;
+        verificationPeriod = verificationPeriod_;
 
         _setupRole(DEFAULT_ADMIN_ROLE, admin_);
         _setupRole(SETTER_ROLE, setter_);
-
-        verificationPeriod = verificationPeriod_;
     }
 
     // ============ Public Functions ============
